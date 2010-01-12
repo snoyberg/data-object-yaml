@@ -1,10 +1,13 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Data.Object.Yaml
     ( -- * Definition of 'YamlObject'
       YamlScalar (..)
     , YamlObject
+      -- * Automatic scalar conversions
+    , IsYamlScalar (..)
       -- * Encoding/decoding
     , encode
     , encodeFile
@@ -25,6 +28,7 @@ import Data.Typeable (Typeable)
 -- debugging purposes import Debug.Trace
 import Control.Failure
 import Control.Applicative ((<$>))
+import qualified Data.Text
 
 #if TEST
 import Test.Framework (testGroup, Test)
@@ -48,14 +52,33 @@ instance Eq YamlScalar where
 
 type YamlObject = Object YamlScalar YamlScalar
 
-encode :: YamlObject -> ByteString
-encode yo = either throw id $ unsafePerformIO $ Y.encode ge $ Phase1 yo
+class IsYamlScalar a where
+    fromYamlScalar :: YamlScalar -> a
+    toYamlScalar :: a -> YamlScalar
+instance IsYamlScalar YamlScalar where
+    fromYamlScalar = id
+    toYamlScalar = id
+instance IsYamlScalar Data.Text.Text where
+    fromYamlScalar = cs . value
+    toYamlScalar t = YamlScalar (cs t) NoTag Any
+instance IsYamlScalar [Char] where
+    fromYamlScalar = cs . value
+    toYamlScalar s = YamlScalar (cs s) NoTag Any
+instance IsYamlScalar ByteString where
+    fromYamlScalar = value
+    toYamlScalar b = YamlScalar b NoTag Any
 
-encodeFile :: MonadFailure YamlException m
+encode :: (IsYamlScalar k, IsYamlScalar v) => Object k v -> ByteString
+encode yo = either throw id $ unsafePerformIO $ Y.encode ge $ Phase1
+          $ mapKeysValues toYamlScalar toYamlScalar yo
+
+encodeFile :: (IsYamlScalar k, IsYamlScalar v, MonadFailure YamlException m)
            => FilePath
-           -> YamlObject
+           -> Object k v
            -> IO (m ())
-encodeFile fp yo = try <$> (Y.encodeFile fp ge $ Phase1 yo)
+encodeFile fp yo =
+    try <$> (Y.encodeFile fp ge $ Phase1
+           $ mapKeysValues toYamlScalar toYamlScalar yo)
 
 data GenState = Phase1 YamlObject
               | Phase2 YamlObject
@@ -88,14 +111,22 @@ ge (PhaseMap [] n) = Just (EventMappingEnd, n)
 ge (PhaseMap ((k, v):pairs) n) = ge $ Phase3 (Scalar k) $ PhaseMap' v pairs n
 ge (PhaseMap' v pairs n) = ge $ Phase3 v $ PhaseMap pairs n
 
-decode :: MonadFailure YamlException m => ByteString -> m YamlObject
-decode bs = (try $ unsafePerformIO $ Y.decode bs pf Parse1) >>= unParseComplete
+decode :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v)
+       => ByteString
+       -> m (Object k v)
+decode bs =
+    mapKeysValues fromYamlScalar fromYamlScalar
+    <$> ((try $ unsafePerformIO $ Y.decode bs pf Parse1)
+    >>= unParseComplete)
 
-decodeFile :: MonadFailure YamlException m => FilePath -> IO (m YamlObject)
+decodeFile :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v)
+           => FilePath
+           -> IO (m (Object k v))
 decodeFile fp = do
     res <- Y.decodeFile fp pf Parse1
     let res' = try res
-    return $ res' >>= unParseComplete
+    return $ mapKeysValues fromYamlScalar fromYamlScalar
+          <$> (res' >>= unParseComplete)
 
 data ParseState =
     Parse1
@@ -175,10 +206,14 @@ sample = Sequence
         ]
     ]
 
+sampleStr :: Object String String
+sampleStr = mapKeysValues fromYamlScalar fromYamlScalar sample
+
 testSuite :: Test
 testSuite = testGroup "Data.Object.Yaml"
     [ testCase "encode/decode" caseEncodeDecode
     , testCase "encode/decode file" caseEncodeDecodeFile
+    , testCase "encode/decode strings" caseEncodeDecodeStrings
     ]
 
 caseEncodeDecode :: Assertion
@@ -192,4 +227,10 @@ caseEncodeDecodeFile = do
     join $ encodeFile fp sample
     out <- join $ decodeFile fp
     out @?= sample
+
+caseEncodeDecodeStrings :: Assertion
+caseEncodeDecodeStrings = do
+    out <- decode $ encode sampleStr
+    out @?= sampleStr
+
 #endif
