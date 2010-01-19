@@ -2,6 +2,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PackageImports #-}
 module Data.Object.Yaml
     ( -- * Definition of 'YamlObject'
       YamlScalar (..)
@@ -23,12 +25,14 @@ import Text.Libyaml hiding (encode, decode, encodeFile, decodeFile)
 import Data.Object
 import Data.ByteString (ByteString)
 import System.IO.Unsafe (unsafePerformIO)
-import Control.Exception (throw, Exception, SomeException (..))
+import Control.Exception (Exception, SomeException (..))
 import Data.Typeable (Typeable)
 -- debugging purposes import Debug.Trace
 import Control.Failure
-import Control.Applicative ((<$>))
+import Control.Applicative
 import qualified Data.Text
+import "transformers" Control.Monad.Trans
+import Control.Monad
 
 #if TEST
 import Test.Framework (testGroup, Test)
@@ -36,8 +40,7 @@ import Test.Framework.Providers.HUnit
 --import Test.Framework.Providers.QuickCheck (testProperty)
 import Test.HUnit hiding (Test, path)
 --import Test.QuickCheck
-
-import Control.Monad (join)
+import qualified Data.ByteString.Char8 as B8
 #endif
 
 -- | Equality depends on 'value' and 'tag', not 'style'.
@@ -69,128 +72,151 @@ instance IsYamlScalar ByteString where
     toYamlScalar b = YamlScalar b NoTag Any
 
 encode :: (IsYamlScalar k, IsYamlScalar v) => Object k v -> ByteString
-encode yo = either throw id $ unsafePerformIO $ Y.encode ge $ Phase1
-          $ mapKeysValues toYamlScalar toYamlScalar yo
+encode = unsafePerformIO . Y.encode . ge
 
-encodeFile :: (IsYamlScalar k, IsYamlScalar v, MonadFailure YamlException m)
+encodeFile :: (IsYamlScalar k, IsYamlScalar v, MonadFailure YamlException m,
+               With m)
            => FilePath
            -> Object k v
-           -> IO (m ())
-encodeFile fp yo =
-    try <$> (Y.encodeFile fp ge $ Phase1
-           $ mapKeysValues toYamlScalar toYamlScalar yo)
+           -> m ()
+encodeFile fp = Y.encodeFile fp . ge
 
-data GenState = Phase1 YamlObject
-              | Phase2 YamlObject
-              | Phase3 YamlObject GenState
-              | Phase4
-              | Phase5
-              | Phase6
-              | PhaseSeq [YamlObject] GenState
-              | PhaseMap [(YamlScalar, YamlObject)] GenState
-              | PhaseMap' YamlObject [(YamlScalar, YamlObject)] GenState
-    deriving (Eq, Show)
+ge :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
+       IsYamlScalar v)
+   => Object k v
+   -> YamlEncoder m ()
+ge yo = emitEvent EventStreamStart >> emitEvent EventDocumentStart
+     >> geO yo >> emitEvent EventDocumentEnd >> emitEvent EventStreamEnd
 
-{- Debugging purposes
-ge' gs =
-    let res = ge gs
-     in traceShow res res
--}
-ge :: GenState -> Maybe (Event, GenState)
-ge (Phase1 yo) = Just (EventStreamStart, Phase2 yo)
-ge (Phase2 yo) = Just (EventDocumentStart, Phase3 yo Phase4)
-ge (Phase3 (Scalar (YamlScalar v t s)) n) = Just (EventScalar v t s, n)
-ge (Phase3 (Sequence yos) n) = Just (EventSequenceStart, PhaseSeq yos n)
-ge (Phase3 (Mapping pairs) n) = Just (EventMappingStart, PhaseMap pairs n)
-ge Phase4 = Just (EventDocumentEnd, Phase5)
-ge Phase5 = Just (EventStreamEnd, Phase6)
-ge Phase6 = Nothing
-ge (PhaseSeq [] n) = Just (EventSequenceEnd, n)
-ge (PhaseSeq (yo:yos) n) = ge $ Phase3 yo $ PhaseSeq yos n
-ge (PhaseMap [] n) = Just (EventMappingEnd, n)
-ge (PhaseMap ((k, v):pairs) n) = ge $ Phase3 (Scalar k) $ PhaseMap' v pairs n
-ge (PhaseMap' v pairs n) = ge $ Phase3 v $ PhaseMap pairs n
+geO :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
+        IsYamlScalar v)
+    => Object k v
+    -> YamlEncoder m ()
+geO (Scalar s) = geS s
+geO (Sequence yos) = emitEvent EventSequenceStart
+                  >> mapM_ geO yos
+                  >> emitEvent EventSequenceEnd
+geO (Mapping pairs) = emitEvent EventMappingStart
+                   >> mapM_ gePair pairs
+                   >> emitEvent EventMappingEnd
+
+gePair :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
+           IsYamlScalar v)
+       => (k, Object k v)
+       -> YamlEncoder m ()
+gePair (ys, yo) = geS ys >> geO yo
+
+geS :: (MonadIO m, IsYamlScalar a, MonadFailure YamlException m)
+    => a
+    -> YamlEncoder m ()
+geS = geYS . toYamlScalar
+
+geYS :: (MonadIO m, MonadFailure YamlException m)
+     => YamlScalar
+     -> YamlEncoder m ()
+geYS (YamlScalar v t s) = emitEvent $ EventScalar v t s
 
 decode :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v)
        => ByteString
        -> m (Object k v)
-decode bs =
-    mapKeysValues fromYamlScalar fromYamlScalar
-    <$> ((try $ unsafePerformIO $ Y.decode bs pf Parse1)
-    >>= unParseComplete)
+decode bs = try $ unsafePerformIO $ unYAttemptIO $ Y.decode bs parse
 
-decodeFile :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v)
+newtype YAttemptIO v = YAttemptIO
+    { unYAttemptIO :: IO (Either YamlException v)
+    }
+instance Monad YAttemptIO where
+    return = YAttemptIO . return . Right
+    (YAttemptIO io) >>= f = YAttemptIO $ do
+        x <- io
+        case x of
+            Left e -> return $ Left e
+            Right y -> unYAttemptIO $ f y
+instance Functor YAttemptIO where
+    fmap = liftM
+instance Applicative YAttemptIO where
+    pure = return
+    (<*>) = ap
+instance Failure YamlException YAttemptIO where
+    failure = YAttemptIO . return . Left
+instance MonadIO YAttemptIO where
+    liftIO = YAttemptIO . fmap Right
+instance With YAttemptIO where
+    with orig = YAttemptIO . orig . (unYAttemptIO .)
+
+decodeFile :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v,
+               With m)
            => FilePath
-           -> IO (m (Object k v))
-decodeFile fp = do
-    res <- Y.decodeFile fp pf Parse1
-    let res' = try res
-    return $ mapKeysValues fromYamlScalar fromYamlScalar
-          <$> (res' >>= unParseComplete)
+           -> m (Object k v)
+decodeFile fp = Y.decodeFile fp parse
 
-data ParseState =
-    Parse1
-  | Parse2
-  | Parse3 (YamlObject -> ParseState)
-  | Parse4 YamlObject
-  | Parse5 YamlObject
-  | ParseComplete (Either YamlException YamlObject)
-  | ParseSeq (YamlObject -> ParseState) ([YamlObject] -> [YamlObject])
-  | ParseMap (YamlObject -> ParseState)
-             ([(YamlScalar, YamlObject)] -> [(YamlScalar, YamlObject)])
-  | ParseMap' (YamlObject -> ParseState)
-              ([(YamlScalar, YamlObject)] -> [(YamlScalar, YamlObject)])
-              YamlScalar
-  | ParseException ParseException
+requireEvent :: (With m, MonadFailure YamlException m)
+             => Event
+             -> YamlDecoder m ()
+requireEvent e = do
+    e' <- parseEvent
+    unless (e == e')
+        $ failure $ YamlOtherException $ SomeException
+        $ UnexpectedEvent e' $ Just e
 
-unParseComplete :: MonadFailure YamlException m
-                => ParseState
-                -> m YamlObject
-unParseComplete (ParseComplete (Left e)) = failure e
-unParseComplete (ParseComplete (Right yo)) = return yo
-unParseComplete p = failure $ YamlOtherException $ SomeException
-                  $ IncompleteParse p
+data UnexpectedEvent = UnexpectedEvent
+    { _received :: Event
+    , _expected :: Maybe Event
+    }
+    deriving (Show, Typeable)
+instance Exception UnexpectedEvent
 
-instance Show ParseState where
-    show Parse1{} = "Parse1"
-    show Parse2{} = "Parse2"
-    show Parse3{} = "Parse3"
-    show Parse4{} = "Parse4"
-    show Parse5{} = "Parse5"
-    show ParseComplete{} = "ParseComplete"
-    show ParseSeq{} = "ParseSeq"
-    show ParseMap{} = "ParseMap"
-    show ParseMap'{} = "ParseMap'"
-    show (ParseException e) = "ParseException " ++ show e
+parse :: (With m, MonadFailure YamlException m, IsYamlScalar k,
+          IsYamlScalar v)
+      => YamlDecoder m (Object k v)
+parse = do
+    requireEvent EventStreamStart
+    requireEvent EventDocumentStart
+    e <- parseEvent
+    res <- parseO e
+    requireEvent EventDocumentEnd
+    requireEvent EventStreamEnd
+    requireEvent EventNone
+    return res
 
--- debugging purposes only pf' p e = traceShow (p, e) $ pf p e
+parseO :: (IsYamlScalar k, IsYamlScalar v, With m,
+           MonadFailure YamlException m)
+       => Event
+       -> YamlDecoder m (Object k v)
+parseO (EventScalar v t s) =
+    return $ Scalar $ fromYamlScalar $ YamlScalar v t s
+parseO EventSequenceStart = parseS id
+parseO EventMappingStart = parseM id
+parseO e = failure $ YamlOtherException $ SomeException
+                   $ UnexpectedEvent e Nothing
 
-pf :: ParseState -> Event -> Either ParseState ParseState
-pf Parse1 EventStreamStart = Right Parse2
-pf Parse2 EventDocumentStart = Right $ Parse3 Parse4
-pf (Parse3 n) (EventScalar v t s) = Right $ n $ Scalar $ YamlScalar v t s
-pf (Parse3 n) EventSequenceStart = Right $ ParseSeq n id
-pf (Parse3 n) EventMappingStart = Right $ ParseMap n id
-pf (Parse4 yo) EventDocumentEnd = Right $ Parse5 yo
-pf (Parse5 yo) EventStreamEnd = Left $ ParseComplete $ Right yo
-pf (ParseSeq n front) EventSequenceEnd = Right $ n $ Sequence $ front []
-pf (ParseSeq n front) e = pf (Parse3 helper) e where
-    helper yo = ParseSeq n $ front . (:) yo
-pf (ParseMap n front) EventMappingEnd = Right $ n $ Mapping $ front []
-pf (ParseMap n front) e = pf (Parse3 helper) e where
-    helper (Scalar ys) = ParseMap' n front ys
-    helper _ = ParseException NonScalarKey
-pf (ParseMap' n front ys) e = pf (Parse3 helper) e where
-    helper yo = ParseMap n $ front . (:) (ys, yo)
-pf Parse2 EventStreamEnd =
-    Left $ ParseComplete $ Left YamlPrematureEventStreamEnd
-pf p e =
-    Left $ ParseComplete $ Left $ YamlOtherException
-         $ SomeException $ InvalidParseState p e
+parseS :: (IsYamlScalar k, IsYamlScalar v, With m,
+           MonadFailure YamlException m)
+       => ([Object k v] -> [Object k v])
+       -> YamlDecoder m (Object k v)
+parseS front = do
+    e <- parseEvent
+    case e of
+        EventSequenceEnd -> return $ Sequence $ front []
+        _ -> do
+            o <- parseO e
+            parseS $ front . (:) o
 
-data ParseException = InvalidParseState ParseState Event
-                    | NonScalarKey
-                    | IncompleteParse ParseState
+parseM :: (IsYamlScalar k, IsYamlScalar v, With m,
+           MonadFailure YamlException m)
+       => ([(k, Object k v)] -> [(k, Object k v)])
+       -> YamlDecoder m (Object k v)
+parseM front = do
+    e <- parseEvent
+    case e of
+        EventMappingEnd -> return $ Mapping $ front []
+        EventScalar v' t s -> do
+            let k = fromYamlScalar $ YamlScalar v' t s
+            v <- parseEvent >>= parseO
+            parseM $ front . (:) (k, v)
+        _ -> failure $ YamlOtherException
+                     $ SomeException NonScalarKey
+
+data ParseException = NonScalarKey
     deriving (Show, Typeable)
 instance Exception ParseException
 
@@ -214,6 +240,7 @@ testSuite = testGroup "Data.Object.Yaml"
     [ testCase "encode/decode" caseEncodeDecode
     , testCase "encode/decode file" caseEncodeDecodeFile
     , testCase "encode/decode strings" caseEncodeDecodeStrings
+    , testCase "decode invalid file" caseDecodeInvalid
     ]
 
 caseEncodeDecode :: Assertion
@@ -224,13 +251,18 @@ caseEncodeDecode = do
 caseEncodeDecodeFile :: Assertion
 caseEncodeDecodeFile = do
     let fp = "tmp.yaml"
-    join $ encodeFile fp sample
-    out <- join $ decodeFile fp
+    encodeFile fp sample
+    out <- decodeFile fp
     out @?= sample
 
 caseEncodeDecodeStrings :: Assertion
 caseEncodeDecodeStrings = do
     out <- decode $ encode sampleStr
     out @?= sampleStr
+
+caseDecodeInvalid :: Assertion
+caseDecodeInvalid = do
+    let invalid = B8.pack "\tthis is 'not' valid :-)"
+    Nothing @=? (decode invalid :: Maybe YamlObject)
 
 #endif

@@ -24,6 +24,7 @@ library
                      convertible-text >= 0.2.0 && < 0.3,
                      attempt >= 0.2.0 && < 0.3,
                      failure >= 0.0.0 && < 0.1,
+                     transformers >= 0.1.4.0 && < 0.2,
                      yaml >= 0.2.0 && < 0.3
     exposed-modules: Data.Object.Yaml
     ghc-options:     -Wall
