@@ -31,6 +31,7 @@ import Data.Typeable (Typeable)
 import Control.Failure
 import Control.Applicative
 import qualified Data.Text
+import qualified Data.Text.Lazy
 import "transformers" Control.Monad.Trans
 import Control.Monad
 
@@ -62,6 +63,9 @@ instance IsYamlScalar YamlScalar where
     fromYamlScalar = id
     toYamlScalar = id
 instance IsYamlScalar Data.Text.Text where
+    fromYamlScalar = cs . value
+    toYamlScalar t = YamlScalar (cs t) NoTag Any
+instance IsYamlScalar Data.Text.Lazy.Text where
     fromYamlScalar = cs . value
     toYamlScalar t = YamlScalar (cs t) NoTag Any
 instance IsYamlScalar [Char] where
