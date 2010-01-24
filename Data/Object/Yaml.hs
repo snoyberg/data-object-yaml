@@ -85,24 +85,27 @@ encodeFile :: (IsYamlScalar k, IsYamlScalar v, MonadFailure YamlException m,
            -> m ()
 encodeFile fp = Y.encodeFile fp . ge
 
+emitEvents :: (MonadIO m, MonadFailure YamlException m)
+           => Event -> Event -> YamlEncoder m () -> YamlEncoder m ()
+emitEvents start stop body = emitEvent start >> body >> emitEvent stop
+
 ge :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
        IsYamlScalar v)
    => Object k v
    -> YamlEncoder m ()
-ge yo = emitEvent EventStreamStart >> emitEvent EventDocumentStart
-     >> geO yo >> emitEvent EventDocumentEnd >> emitEvent EventStreamEnd
+ge yo = emitEvents EventStreamStart EventStreamEnd
+      $ emitEvents EventDocumentStart EventDocumentEnd
+      $ geO yo
 
 geO :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
         IsYamlScalar v)
     => Object k v
     -> YamlEncoder m ()
 geO (Scalar s) = geS s
-geO (Sequence yos) = emitEvent EventSequenceStart
-                  >> mapM_ geO yos
-                  >> emitEvent EventSequenceEnd
-geO (Mapping pairs) = emitEvent EventMappingStart
-                   >> mapM_ gePair pairs
-                   >> emitEvent EventMappingEnd
+geO (Sequence yos)  = emitEvents EventSequenceStart EventSequenceEnd
+                    $ mapM_ geO yos
+geO (Mapping pairs) = emitEvents EventMappingStart EventMappingEnd
+                    $ mapM_ gePair pairs
 
 gePair :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
            IsYamlScalar v)
@@ -113,12 +116,10 @@ gePair (ys, yo) = geS ys >> geO yo
 geS :: (MonadIO m, IsYamlScalar a, MonadFailure YamlException m)
     => a
     -> YamlEncoder m ()
-geS = geYS . toYamlScalar
+geS = emitEvent . toEventScalar . toYamlScalar
 
-geYS :: (MonadIO m, MonadFailure YamlException m)
-     => YamlScalar
-     -> YamlEncoder m ()
-geYS (YamlScalar v t s) = emitEvent $ EventScalar v t s
+toEventScalar :: YamlScalar -> Event
+toEventScalar (YamlScalar v t s) = EventScalar v t s
 
 decode :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v)
        => ByteString
