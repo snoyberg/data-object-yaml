@@ -1,5 +1,5 @@
 name:            data-object-yaml
-version:         0.2.0
+version:         0.2.0.1
 license:         BSD3
 license-file:    LICENSE
 author:          Michael Snoyman <michael@snoyman.com>
@@ -20,7 +20,7 @@ library
     build-depends:   base >= 4 && < 5,
                      data-object >= 0.2.0 && < 0.3,
                      bytestring >= 0.9.1.4 && < 0.10,
-                     text >= 0.5 && < 0.6,
+                     text >= 0.7 && < 0.8,
                      convertible-text >= 0.2.0 && < 0.3,
                      attempt >= 0.2.0 && < 0.3,
                      failure >= 0.0.0 && < 0.1,
