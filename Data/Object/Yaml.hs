@@ -24,6 +24,7 @@ import qualified Text.Libyaml as Y
 import Text.Libyaml hiding (encode, decode, encodeFile, decodeFile)
 import Data.Object
 import Data.ByteString (ByteString)
+import qualified Data.Map as Map
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Exception (Exception, SomeException (..))
 import Data.Typeable (Typeable)
@@ -33,6 +34,7 @@ import Control.Applicative
 import qualified Data.Text
 import qualified Data.Text.Lazy
 import "transformers" Control.Monad.Trans
+import "transformers" Control.Monad.Trans.State
 import Control.Monad
 
 #if TEST
@@ -102,9 +104,9 @@ geO :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
     => Object k v
     -> YamlEncoder m ()
 geO (Scalar s) = geS s
-geO (Sequence yos)  = emitEvents EventSequenceStart EventSequenceEnd
+geO (Sequence yos)  = emitEvents (EventSequenceStart Nothing) EventSequenceEnd
                     $ mapM_ geO yos
-geO (Mapping pairs) = emitEvents EventMappingStart EventMappingEnd
+geO (Mapping pairs) = emitEvents (EventMappingStart Nothing) EventMappingEnd
                     $ mapM_ gePair pairs
 
 gePair :: (MonadIO m, MonadFailure YamlException m, IsYamlScalar k,
@@ -119,7 +121,7 @@ geS :: (MonadIO m, IsYamlScalar a, MonadFailure YamlException m)
 geS = emitEvent . toEventScalar . toYamlScalar
 
 toEventScalar :: YamlScalar -> Event
-toEventScalar (YamlScalar v t s) = EventScalar v t s
+toEventScalar (YamlScalar v t s) = EventScalar v t s Nothing
 
 decode :: (MonadFailure YamlException m, IsYamlScalar k, IsYamlScalar v)
        => ByteString
@@ -170,6 +172,8 @@ data UnexpectedEvent = UnexpectedEvent
     deriving (Show, Typeable)
 instance Exception UnexpectedEvent
 
+type Parser s m = StateT (Map.Map String s) (YamlDecoder m)
+
 parse :: (With m, MonadFailure YamlException m, IsYamlScalar k,
           IsYamlScalar v)
       => YamlDecoder m (Object k v)
@@ -177,7 +181,7 @@ parse = do
     requireEvent EventStreamStart
     requireEvent EventDocumentStart
     e <- parseEvent
-    res <- parseO e
+    res <- evalStateT (parseO e) Map.empty
     requireEvent EventDocumentEnd
     requireEvent EventStreamEnd
     requireEvent EventNone
@@ -186,42 +190,67 @@ parse = do
 parseO :: (IsYamlScalar k, IsYamlScalar v, With m,
            MonadFailure YamlException m)
        => Event
-       -> YamlDecoder m (Object k v)
-parseO (EventScalar v t s) =
-    return $ Scalar $ fromYamlScalar $ YamlScalar v t s
-parseO EventSequenceStart = parseS id
-parseO EventMappingStart = parseM id
+       -> Parser (Object k v) m (Object k v)
+parseO (EventScalar v t s a) = do
+    let res = Scalar $ fromYamlScalar $ YamlScalar v t s
+    case a of
+        Nothing -> return res
+        Just an -> do
+            modify (Map.insert an res)
+            return res
+parseO (EventSequenceStart a) = parseS a id
+parseO (EventMappingStart a) = parseM a id
+parseO (EventAlias an) = do
+    m <- get
+    case Map.lookup an m of
+        Nothing -> failure $ YamlOtherException $ SomeException $ UnknownAlias an
+        Just v -> return v
 parseO e = failure $ YamlOtherException $ SomeException
                    $ UnexpectedEvent e Nothing
 
 parseS :: (IsYamlScalar k, IsYamlScalar v, With m,
            MonadFailure YamlException m)
-       => ([Object k v] -> [Object k v])
-       -> YamlDecoder m (Object k v)
-parseS front = do
-    e <- parseEvent
+       => Y.Anchor
+       -> ([Object k v] -> [Object k v])
+       -> Parser (Object k v) m (Object k v)
+parseS a front = do
+    e <- lift $ parseEvent
     case e of
-        EventSequenceEnd -> return $ Sequence $ front []
+        EventSequenceEnd -> do
+            let res = Sequence $ front []
+            case a of
+                Nothing -> return res
+                Just an -> do
+                    modify (Map.insert an res)
+                    return res
         _ -> do
             o <- parseO e
-            parseS $ front . (:) o
+            parseS a $ front . (:) o
 
 parseM :: (IsYamlScalar k, IsYamlScalar v, With m,
            MonadFailure YamlException m)
-       => ([(k, Object k v)] -> [(k, Object k v)])
-       -> YamlDecoder m (Object k v)
-parseM front = do
-    e <- parseEvent
+       => Y.Anchor
+       -> ([(k, Object k v)] -> [(k, Object k v)])
+       -> Parser (Object k v) m (Object k v)
+parseM a front = do
+    e <- lift $ parseEvent
     case e of
-        EventMappingEnd -> return $ Mapping $ front []
-        EventScalar v' t s -> do
+        EventMappingEnd -> do
+            let res = Mapping $ front []
+            case a of
+                Nothing -> return res
+                Just an -> do
+                    modify (Map.insert an res)
+                    return res
+        EventScalar v' t s Nothing -> do
             let k = fromYamlScalar $ YamlScalar v' t s
-            v <- parseEvent >>= parseO
-            parseM $ front . (:) (k, v)
+            v <- (lift $ parseEvent) >>= parseO
+            parseM a $ front . (:) (k, v)
         _ -> failure $ YamlOtherException
                      $ SomeException NonScalarKey
 
 data ParseException = NonScalarKey
+                    | UnknownAlias { _anchorName :: Y.AnchorName }
     deriving (Show, Typeable)
 instance Exception ParseException
 
