@@ -33,7 +33,12 @@ import Control.Failure
 import Control.Applicative
 import qualified Data.Text
 import qualified Data.Text.Lazy
+#if MIN_VERSION_transformers(0,2,0)
+import "transformers" Control.Monad.Trans.Class
+import "transformers" Control.Monad.IO.Class
+#else
 import "transformers" Control.Monad.Trans
+#endif
 import "transformers" Control.Monad.Trans.State
 import Control.Monad
 
