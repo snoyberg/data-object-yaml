@@ -17,9 +17,6 @@ module Data.Object.Yaml
     , encodeFile
     , decode
     , decodeFile
-#if TEST
-    , testSuite
-#endif
     ) where
 
 import qualified Text.Libyaml as Y
@@ -45,15 +42,6 @@ import Data.Iteratee
 import qualified Data.Iteratee as I
 import Control.Monad.CatchIO hiding (try)
 import Prelude hiding (catch)
-
-#if TEST
-import Test.Framework (testGroup, Test)
-import Test.Framework.Providers.HUnit
---import Test.Framework.Providers.QuickCheck (testProperty)
-import Test.HUnit hiding (Test, path)
---import Test.QuickCheck
-import qualified Data.ByteString.Char8 as B8
-#endif
 
 -- | Equality depends on 'value' and 'tag', not 'style'.
 data YamlScalar = YamlScalar
@@ -280,66 +268,3 @@ run' iter = do
         Right (Done x _) -> return $ Right x
         Right (Cont _ e) -> return $ Left $ InvalidYaml e
 
-#if TEST
-mkScalar :: String -> YamlScalar
-mkScalar s = YamlScalar (cs s) StrTag Folded
-
-sample :: YamlObject
-sample = Sequence
-    [ Scalar $ mkScalar "foo"
-    , Mapping
-        [ (mkScalar "bar1", Scalar $ mkScalar "bar2")
-        ]
-    ]
-
-sampleEncoded :: String
-sampleEncoded = "- !!str >-\n  foo\n- !!str \"bar1\": !!str >-\n    bar2\n"
-
-sampleStr :: Object String String
-sampleStr = mapKeysValues fromYamlScalar fromYamlScalar sample
-
-testSuite :: Test
-testSuite = testGroup "Data.Object.Yaml"
-    [ testCase "encode" caseEncode
-    , testCase "encode file" caseEncodeFile
-    , testCase "encode/decode" caseEncodeDecode
-    , testCase "encode/decode file" caseEncodeDecodeFile
-    , testCase "encode/decode strings" caseEncodeDecodeStrings
-    , testCase "decode invalid file" caseDecodeInvalid
-    ]
-
-caseEncode :: Assertion
-caseEncode = do
-    let out = encode sample
-    B8.unpack out @?= sampleEncoded
-
-caseEncodeFile :: Assertion
-caseEncodeFile = do
-    let tmpfile = "tmp.yaml"
-    encodeFile tmpfile sample
-    out <- B8.readFile tmpfile
-    B8.unpack out @?= sampleEncoded
-
-caseEncodeDecode :: Assertion
-caseEncodeDecode = do
-    out <- decode $ encode sample
-    out @?= sample
-
-caseEncodeDecodeFile :: Assertion
-caseEncodeDecodeFile = do
-    let fp = "tmp.yaml"
-    encodeFile fp sample
-    out <- join $ decodeFile fp
-    out @?= sample
-
-caseEncodeDecodeStrings :: Assertion
-caseEncodeDecodeStrings = do
-    out <- decode $ encode $ toYamlObject sampleStr
-    fromYamlObject out @?= sampleStr
-
-caseDecodeInvalid :: Assertion
-caseDecodeInvalid = do
-    let invalid = B8.pack "\tthis is 'not' valid :-)"
-    Nothing @=? (decode invalid :: Maybe YamlObject)
-
-#endif

@@ -6,20 +6,69 @@ import Test.HUnit hiding (Test)
 import Data.Maybe
 import qualified Data.ByteString.Char8 as B8
 
-import Data.Object
-import qualified Data.Object.Yaml as Y
+import qualified Text.Libyaml as LY
 
-ys :: (Y.IsYamlScalar a) => a -> Y.YamlScalar
-ys = Y.toYamlScalar
+import Data.Object
+import Data.Object.Yaml
+
+import Control.Monad
+
+mkFoldedScalar :: String -> YamlScalar
+mkFoldedScalar s = YamlScalar (cs s) LY.StrTag LY.Folded
+
+mkScalar :: String -> YamlScalar
+mkScalar = toYamlScalar
+
+sample :: YamlObject
+sample = Sequence
+    [ Scalar $ mkFoldedScalar "foo"
+    , Mapping
+        [ (mkFoldedScalar "bar1", Scalar $ mkFoldedScalar "bar2")
+        ]
+    ]
+
+sampleStr :: Object String String
+sampleStr = mapKeysValues fromYamlScalar fromYamlScalar sample
 
 main :: IO ()
 main = defaultMain
-    [ Y.testSuite
-    , testSuite
+    [ testSuite
+    , testSuiteOfAliases
     ]
 
 testSuite :: Test
-testSuite = testGroup "Tests using samples"
+testSuite = testGroup "Data.Object.Yaml"
+    [ testCase "encode/decode" caseEncodeDecode
+    , testCase "encode/decode file" caseEncodeDecodeFile
+    , testCase "encode/decode strings" caseEncodeDecodeStrings
+    , testCase "decode invalid file" caseDecodeInvalid
+    ]
+
+caseEncodeDecode :: Assertion
+caseEncodeDecode = do
+    out <- decode $ encode sample
+    out @?= sample
+
+caseEncodeDecodeFile :: Assertion
+caseEncodeDecodeFile = do
+    let fp = "tmp.yaml"
+    encodeFile fp sample
+    out <- join $ decodeFile fp
+    out @?= sample
+
+caseEncodeDecodeStrings :: Assertion
+caseEncodeDecodeStrings = do
+    out <- decode $ encode $ toYamlObject sampleStr
+    fromYamlObject out @?= sampleStr
+
+caseDecodeInvalid :: Assertion
+caseDecodeInvalid = do
+    let invalid = B8.pack "\tthis is 'not' valid :-)"
+    Nothing @=? (decode invalid :: Maybe YamlObject)
+
+
+testSuiteOfAliases :: Test
+testSuiteOfAliases = testGroup "Tests of aliases"
     [ testCase "simple scalar alias" caseSimpleScalarAlias
     , testCase "simple sequence alias" caseSimpleSequenceAlias
     , testCase "simple mapping alias" caseSimpleMappingAlias
@@ -30,50 +79,50 @@ testSuite = testGroup "Tests using samples"
 
 caseSimpleScalarAlias :: Assertion
 caseSimpleScalarAlias = do
-    let maybeRes = Y.decode yamlBS :: Maybe (Y.YamlObject)
+    let maybeRes = decode yamlBS :: Maybe YamlObject
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
-    res @?= Sequence [Scalar (ys "foo"), Scalar (ys "baz"), Scalar (ys "foo")]
+    res @?= Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz"), Scalar (mkScalar "foo")]
     where yamlString = "- &anch foo\n- baz\n- *anch"
           yamlBS = B8.pack yamlString
 
 caseSimpleSequenceAlias :: Assertion
 caseSimpleSequenceAlias = do
-    let maybeRes = Y.decode yamlBS :: Maybe (Y.YamlObject)
+    let maybeRes = decode yamlBS :: Maybe YamlObject
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
-    res @?= Mapping [(ys "seq", Sequence [Scalar (ys "foo"), Scalar (ys "baz")]), (ys "seq2", Sequence [Scalar (ys "foo"), Scalar (ys "baz")])]
+    res @?= Mapping [(mkScalar "seq", Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz")]), (mkScalar "seq2", Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz")])]
     where yamlString = "seq: &anch\n  - foo\n  - baz\nseq2: *anch"
           yamlBS = B8.pack yamlString
 
 caseSimpleMappingAlias :: Assertion
 caseSimpleMappingAlias = do
-    let maybeRes = Y.decode yamlBS :: Maybe (Y.YamlObject)
+    let maybeRes = decode yamlBS :: Maybe YamlObject
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
-    res @?= Mapping [(ys "map", Mapping [(ys "key1", Scalar (ys "foo")), (ys "key2", Scalar (ys "baz"))]), (ys "map2", Mapping [(ys "key1", Scalar (ys "foo")), (ys "key2", Scalar (ys "baz"))])]
+    res @?= Mapping [(mkScalar "map", Mapping [(mkScalar "key1", Scalar (mkScalar "foo")), (mkScalar "key2", Scalar (mkScalar "baz"))]), (mkScalar "map2", Mapping [(mkScalar "key1", Scalar (mkScalar "foo")), (mkScalar "key2", Scalar (mkScalar "baz"))])]
     where yamlString = "map: &anch\n  key1: foo\n  key2: baz\nmap2: *anch"
           yamlBS = B8.pack yamlString
 
 caseMappingAliasBeforeAnchor :: Assertion
 caseMappingAliasBeforeAnchor = do
-    let res = Y.decode yamlBS :: Maybe (Y.YamlObject)
+    let res = decode yamlBS :: Maybe YamlObject
     isNothing res @? "decode should return Nothing due to unknown alias"
     where yamlString = "map: *anch\nmap2: &anch\n  key1: foo\n  key2: baz"
           yamlBS = B8.pack yamlString
 
 caseMappingAliasInsideAnchor :: Assertion
 caseMappingAliasInsideAnchor = do
-    let res = Y.decode yamlBS :: Maybe (Y.YamlObject)
+    let res = decode yamlBS :: Maybe YamlObject
     isNothing res @? "decode should return Nothing due to unknown alias"
     where yamlString = "map: &anch\n  key1: foo\n  key2: *anch"
           yamlBS = B8.pack yamlString
 
 caseScalarAliasOverriding :: Assertion
 caseScalarAliasOverriding = do
-    let maybeRes = Y.decode yamlBS :: Maybe (Y.YamlObject)
+    let maybeRes = decode yamlBS :: Maybe YamlObject
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
-    res @?= Sequence [Scalar (ys "foo"), Scalar (ys "baz"), Scalar (ys "foo"), Scalar (ys "boo"), Scalar (ys "buz"), Scalar (ys "boo")]
+    res @?= Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz"), Scalar (mkScalar "foo"), Scalar (mkScalar "boo"), Scalar (mkScalar "buz"), Scalar (mkScalar "boo")]
     where yamlString = "- &anch foo\n- baz\n- *anch\n- &anch boo\n- buz\n- *anch"
           yamlBS = B8.pack yamlString
