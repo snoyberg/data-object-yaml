@@ -21,8 +21,6 @@ library
                      data-object >= 0.2.0 && < 0.3,
                      bytestring >= 0.9.1.4 && < 0.10,
                      text >= 0.7 && < 0.8,
-                     convertible-text >= 0.2.0 && < 0.3,
-                     attempt >= 0.2.0 && < 0.3,
                      failure >= 0.0.0 && < 0.1,
                      transformers >= 0.1.4.0 && < 0.3,
                      yaml >= 0.3.0 && < 0.4,
@@ -37,10 +35,8 @@ executable           runtests
         Buildable: True
         cpp-options:     -DTEST
         build-depends:   test-framework,
-                         test-framework-quickcheck,
                          test-framework-hunit,
-                         HUnit,
-                         QuickCheck >= 1 && < 2
+                         HUnit
     else
         Buildable: False
     ghc-options:     -Wall

@@ -26,7 +26,6 @@ import Data.ByteString (ByteString)
 import qualified Data.Map as Map
 import System.IO.Unsafe (unsafePerformIO)
 import Data.Typeable (Typeable)
--- debugging purposes import Debug.Trace
 import Control.Failure
 import qualified Data.Text
 import qualified Data.Text.Lazy
