@@ -20,14 +20,17 @@ main = defaultMain
 
 testSuite :: Test
 testSuite = testGroup "Tests using samples"
-    [ testCase "simple scalar alias" caseSimpleScalarAlias
+    [ {- FIXME
+      testCase "simple scalar alias" caseSimpleScalarAlias
     , testCase "simple sequence alias" caseSimpleSequenceAlias
     , testCase "simple mapping alias" caseSimpleMappingAlias
     , testCase "mapping alias before anchor" caseMappingAliasBeforeAnchor
     , testCase "mapping alias inside anchor" caseMappingAliasInsideAnchor
     , testCase "scalar alias overriding" caseScalarAliasOverriding
+      -}
     ]
 
+{- FIXME
 caseSimpleScalarAlias :: Assertion
 caseSimpleScalarAlias = do
     let maybeRes = Y.decode yamlBS :: Maybe (Y.YamlObject)
@@ -77,3 +80,4 @@ caseScalarAliasOverriding = do
     res @?= Sequence [Scalar (ys "foo"), Scalar (ys "baz"), Scalar (ys "foo"), Scalar (ys "boo"), Scalar (ys "buz"), Scalar (ys "boo")]
     where yamlString = "- &anch foo\n- baz\n- *anch\n- &anch boo\n- buz\n- *anch"
           yamlBS = B8.pack yamlString
+-}
