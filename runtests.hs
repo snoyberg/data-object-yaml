@@ -5,6 +5,7 @@ import Test.HUnit hiding (Test)
 
 import Data.Maybe
 import qualified Data.ByteString.Char8 as B8
+import Data.Convertible.Text (cs)
 
 import qualified Text.Libyaml as LY
 

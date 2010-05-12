@@ -25,10 +25,16 @@ import Data.Object
 import Data.ByteString (ByteString)
 import qualified Data.Map as Map
 import System.IO.Unsafe (unsafePerformIO)
-import Data.Typeable (Typeable)
 import Control.Failure
+
 import qualified Data.Text
 import qualified Data.Text.Lazy
+import qualified Data.ByteString
+import qualified Data.ByteString.Lazy
+
+import Data.Convertible.Text (cs)
+import Data.Data
+
 #if MIN_VERSION_transformers(0,2,0)
 import "transformers" Control.Monad.Trans.Class
 import "transformers" Control.Monad.IO.Class
@@ -48,7 +54,7 @@ data YamlScalar = YamlScalar
     , tag :: Tag
     , style :: Style
     }
-    deriving (Show)
+    deriving (Show, Read, Data, Typeable)
 instance Eq YamlScalar where
     (YamlScalar v t _) == (YamlScalar v' t' _) = v == v' && t == t'
 
@@ -69,9 +75,12 @@ instance IsYamlScalar Data.Text.Lazy.Text where
 instance IsYamlScalar [Char] where
     fromYamlScalar = cs . value
     toYamlScalar s = YamlScalar (cs s) NoTag Any
-instance IsYamlScalar ByteString where
+instance IsYamlScalar Data.ByteString.ByteString where
     fromYamlScalar = value
     toYamlScalar b = YamlScalar b NoTag Any
+instance IsYamlScalar Data.ByteString.Lazy.ByteString where
+    fromYamlScalar = cs . value
+    toYamlScalar b = YamlScalar (cs b) NoTag Any
 
 -- | Merge assoc-lists by keys.
 -- First list overrides second:
@@ -104,10 +113,10 @@ encode obj =
         (objToEvents $ toYamlObject obj)
         Y.encode >>= run)
 
-encodeFile :: (MonadIO m, IsYamlScalar k, IsYamlScalar v)
+encodeFile :: (IsYamlScalar k, IsYamlScalar v)
            => FilePath
            -> Object k v
-           -> m ()
+           -> IO ()
 encodeFile fp obj =
     enumPure1Chunk (objToEvents $ toYamlObject obj) (Y.encodeFile fp)
     >>= run
@@ -271,12 +280,12 @@ parseM a front = do
           merge' al (Mapping om) = mergeAssocLists al om
           merge' al _            = al
 
-decode :: (MonadFailure ParseException m, IsYamlScalar k, IsYamlScalar v)
+decode :: (Failure ParseException m, IsYamlScalar k, IsYamlScalar v)
        => ByteString
        -> m (Object k v)
 decode bs = try $ unsafePerformIO $ run' $ joinIM $ Y.decode bs parse
 
-decodeFile :: (MonadFailure ParseException m, IsYamlScalar k, IsYamlScalar v)
+decodeFile :: (Failure ParseException m, IsYamlScalar k, IsYamlScalar v)
            => FilePath
            -> IO (m (Object k v))
 decodeFile fp = fmap try $ run' $ joinIM $ Y.decodeFile fp parse
