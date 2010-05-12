@@ -38,7 +38,7 @@ import "transformers" Control.Monad.Trans
 #endif
 import "transformers" Control.Monad.Trans.State
 import Control.Monad
-import Data.Iteratee
+import Data.Iteratee hiding (foldl)
 import qualified Data.Iteratee as I
 import Control.Monad.CatchIO hiding (try)
 import Prelude hiding (catch)
@@ -55,7 +55,7 @@ instance Eq YamlScalar where
 
 type YamlObject = Object YamlScalar YamlScalar
 
-class IsYamlScalar a where
+class (Eq a) => IsYamlScalar a where
     fromYamlScalar :: YamlScalar -> a
     toYamlScalar :: a -> YamlScalar
 instance IsYamlScalar YamlScalar where
@@ -73,6 +73,18 @@ instance IsYamlScalar [Char] where
 instance IsYamlScalar ByteString where
     fromYamlScalar = value
     toYamlScalar b = YamlScalar b NoTag Any
+
+-- | Merge assoc-lists by keys.
+-- First list overrides second:
+--     [(k1, x), (k2, y)] `mergeAssocLists` [(k3, z)] == [(k1, x), (k2, y), (k3, z)]
+--     [(k1, x), (k2, y)] `mergeAssocLists` [(k2, z)] == [(k1, x), (k2, y)]
+mergeAssocLists :: (Eq k) => [(k, v)] -> [(k, v)] -> [(k, v)]
+mergeAssocLists a [] = a
+mergeAssocLists [] b = b
+mergeAssocLists a ((bk, bv):bs) =
+    case lookup bk a of
+      Nothing -> mergeAssocLists ((bk, bv) : a) bs
+      Just _  -> mergeAssocLists a bs
 
 toYamlObject :: IsYamlScalar k
              => IsYamlScalar v
@@ -244,7 +256,17 @@ parseM a front = do
                     Just (EventScalar v t s a') -> parseScalar v t s a'
                     _ -> lift $ pfailure $ UnexpectedEvent me' Nothing
             o <- parseO
-            parseM a $ front . (:) (s, o)
+            let al  = mergeAssocLists [(s, o)] $ front []
+                al' = if fromYamlScalar s == "<<"
+                         then case o of
+                                  Scalar _    -> al
+                                  Mapping l  -> mergeAssocLists al l
+                                  Sequence l -> mergeAssocLists al $ foldl merge' [] l
+                         else al
+            parseM a (`mergeAssocLists` al')
+    where merge' :: (Eq k) => [(k, Object k v)] -> Object k v -> [(k, Object k v)]
+          merge' al (Mapping om) = mergeAssocLists al om
+          merge' al _            = al
 
 decode :: MonadFailure ParseException m
        => ByteString

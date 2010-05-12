@@ -17,7 +17,17 @@ mkFoldedScalar :: String -> YamlScalar
 mkFoldedScalar s = YamlScalar (cs s) LY.StrTag LY.Folded
 
 mkScalar :: String -> YamlScalar
-mkScalar = toYamlScalar
+mkScalar s = YamlScalar (cs s) LY.NoTag LY.Plain
+
+mkStrScalar :: String -> YamlScalar
+mkStrScalar s = YamlScalar (cs s) LY.StrTag LY.Plain
+
+mappingKey :: YamlObject -> String -> YamlObject
+mappingKey (Mapping m) k = (fromJust . lookup (mkScalar k) $ m)
+mappingKey _ _ = error "expected Mapping"
+
+decodeYaml :: String -> Maybe YamlObject
+decodeYaml s = decode $ B8.pack s
 
 sample :: YamlObject
 sample = Sequence
@@ -34,6 +44,7 @@ main :: IO ()
 main = defaultMain
     [ testSuite
     , testSuiteOfAliases
+    , testSuiteOfMergeKeys
     ]
 
 testSuite :: Test
@@ -79,50 +90,71 @@ testSuiteOfAliases = testGroup "Tests of aliases"
 
 caseSimpleScalarAlias :: Assertion
 caseSimpleScalarAlias = do
-    let maybeRes = decode yamlBS :: Maybe YamlObject
+    let maybeRes = decodeYaml "- &anch foo\n- baz\n- *anch"
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
     res @?= Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz"), Scalar (mkScalar "foo")]
-    where yamlString = "- &anch foo\n- baz\n- *anch"
-          yamlBS = B8.pack yamlString
 
 caseSimpleSequenceAlias :: Assertion
 caseSimpleSequenceAlias = do
-    let maybeRes = decode yamlBS :: Maybe YamlObject
+    let maybeRes = decodeYaml "seq: &anch\n  - foo\n  - baz\nseq2: *anch"
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
     res @?= Mapping [(mkScalar "seq", Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz")]), (mkScalar "seq2", Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz")])]
-    where yamlString = "seq: &anch\n  - foo\n  - baz\nseq2: *anch"
-          yamlBS = B8.pack yamlString
 
 caseSimpleMappingAlias :: Assertion
 caseSimpleMappingAlias = do
-    let maybeRes = decode yamlBS :: Maybe YamlObject
+    let maybeRes = decodeYaml "map: &anch\n  key1: foo\n  key2: baz\nmap2: *anch"
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
     res @?= Mapping [(mkScalar "map", Mapping [(mkScalar "key1", Scalar (mkScalar "foo")), (mkScalar "key2", Scalar (mkScalar "baz"))]), (mkScalar "map2", Mapping [(mkScalar "key1", Scalar (mkScalar "foo")), (mkScalar "key2", Scalar (mkScalar "baz"))])]
-    where yamlString = "map: &anch\n  key1: foo\n  key2: baz\nmap2: *anch"
-          yamlBS = B8.pack yamlString
 
 caseMappingAliasBeforeAnchor :: Assertion
 caseMappingAliasBeforeAnchor = do
-    let res = decode yamlBS :: Maybe YamlObject
+    let res = decodeYaml "map: *anch\nmap2: &anch\n  key1: foo\n  key2: baz"
     isNothing res @? "decode should return Nothing due to unknown alias"
-    where yamlString = "map: *anch\nmap2: &anch\n  key1: foo\n  key2: baz"
-          yamlBS = B8.pack yamlString
 
 caseMappingAliasInsideAnchor :: Assertion
 caseMappingAliasInsideAnchor = do
-    let res = decode yamlBS :: Maybe YamlObject
+    let res = decodeYaml "map: &anch\n  key1: foo\n  key2: *anch"
     isNothing res @? "decode should return Nothing due to unknown alias"
-    where yamlString = "map: &anch\n  key1: foo\n  key2: *anch"
-          yamlBS = B8.pack yamlString
 
 caseScalarAliasOverriding :: Assertion
 caseScalarAliasOverriding = do
-    let maybeRes = decode yamlBS :: Maybe YamlObject
+    let maybeRes = decodeYaml "- &anch foo\n- baz\n- *anch\n- &anch boo\n- buz\n- *anch"
     isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
     let res = fromJust maybeRes
     res @?= Sequence [Scalar (mkScalar "foo"), Scalar (mkScalar "baz"), Scalar (mkScalar "foo"), Scalar (mkScalar "boo"), Scalar (mkScalar "buz"), Scalar (mkScalar "boo")]
-    where yamlString = "- &anch foo\n- baz\n- *anch\n- &anch boo\n- buz\n- *anch"
-          yamlBS = B8.pack yamlString
+
+
+testSuiteOfMergeKeys :: Test
+testSuiteOfMergeKeys = testGroup "Tests of 'merge keys' feature"
+        [ testCase "test uniqueness of keys" caseAllKeysShouldBeUnique
+        , testCase "test mapping merge" caseSimpleMappingMerge
+        , testCase "test sequence of mappings merging" caseMergeSequence
+        ]
+
+caseAllKeysShouldBeUnique :: Assertion
+caseAllKeysShouldBeUnique = do
+    let maybeRes = decodeYaml "foo1: foo\nfoo2: baz\nfoo1: buz"
+    isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
+    let res = fromJust maybeRes
+    mappingKey res "foo1" @?= Scalar (mkScalar "buz")
+
+caseSimpleMappingMerge :: Assertion
+caseSimpleMappingMerge = do
+    let maybeRes = decodeYaml "foo1: foo\nfoo2: baz\n<<:\n  foo1: buz\n  foo3: fuz"
+    isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
+    let res = fromJust maybeRes
+    mappingKey res "foo1" @?= Scalar (mkScalar "foo")
+    mappingKey res "foo3" @?= Scalar (mkScalar "fuz")
+
+caseMergeSequence :: Assertion
+caseMergeSequence = do
+    let maybeRes = decodeYaml "m1: &m1\n  k1: !!str 1\n  k2: !!str 2\nm2: &m2\n  k1: !!str 3\n  k3: !!str 4\nfoo1: foo\n<<: [ *m1, *m2 ]"
+    isJust maybeRes @? "decoder should return Just YamlObject but returned Nothing"
+    let res = fromJust maybeRes
+    mappingKey res "foo1" @?= Scalar (mkScalar "foo")
+    mappingKey res "k1" @?= Scalar (mkStrScalar "1")
+    mappingKey res "k2" @?= Scalar (mkStrScalar "2")
+    mappingKey res "k3" @?= Scalar (mkStrScalar "4")
