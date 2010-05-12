@@ -2,7 +2,7 @@ name:            data-object-yaml
 version:         0.3.0
 license:         BSD3
 license-file:    LICENSE
-author:          Michael Snoyman <michael@snoyman.com>
+author:          Michael Snoyman <michael@snoyman.com>, Anton Ageev <antage@gmail.com>
 maintainer:      Michael Snoyman <michael@snoyman.com>
 synopsis:        Serialize data to and from Yaml files
 description:     Provides high level conversions based on the data-object package. Parsing and emitting is handled by the yaml package, which in turn uses the libyaml C library.
