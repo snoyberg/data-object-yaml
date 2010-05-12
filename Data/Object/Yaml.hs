@@ -10,11 +10,13 @@ module Data.Object.Yaml
     , YamlObject
       -- * Automatic scalar conversions
     , IsYamlScalar (..)
+    , toYamlObject
+    , fromYamlObject
       -- * Encoding/decoding
     , encode
     , encodeFile
-    -- FIXME , decode
-    -- FIXME , decodeFile
+    , decode
+    , decodeFile
 #if TEST
     , testSuite
 #endif
@@ -26,11 +28,9 @@ import Data.Object
 import Data.ByteString (ByteString)
 import qualified Data.Map as Map
 import System.IO.Unsafe (unsafePerformIO)
-import Control.Exception (Exception, SomeException (..))
 import Data.Typeable (Typeable)
 -- debugging purposes import Debug.Trace
 import Control.Failure
-import Control.Applicative
 import qualified Data.Text
 import qualified Data.Text.Lazy
 #if MIN_VERSION_transformers(0,2,0)
@@ -42,6 +42,9 @@ import "transformers" Control.Monad.Trans
 import "transformers" Control.Monad.Trans.State
 import Control.Monad
 import Data.Iteratee
+import qualified Data.Iteratee as I
+import Control.Monad.CatchIO hiding (try)
+import Prelude hiding (catch)
 
 #if TEST
 import Test.Framework (testGroup, Test)
@@ -83,6 +86,18 @@ instance IsYamlScalar ByteString where
     fromYamlScalar = value
     toYamlScalar b = YamlScalar b NoTag Any
 
+toYamlObject :: IsYamlScalar k
+             => IsYamlScalar v
+             => Object k v
+             -> YamlObject
+toYamlObject = mapKeysValues toYamlScalar toYamlScalar
+
+fromYamlObject :: IsYamlScalar k
+               => IsYamlScalar v
+               => YamlObject
+               -> Object k v
+fromYamlObject = mapKeysValues fromYamlScalar fromYamlScalar
+
 encode :: YamlObject -> ByteString
 encode obj =
     unsafePerformIO (enumPure1Chunk (objToEvents obj) Y.encode >>= run)
@@ -119,142 +134,151 @@ pairToEvents (k, v) rest =
     scalarToEvent k
   : objToEvents' v rest
 
-{- FIXME
-decode :: MonadFailure ParseException m
-       => IsYamlScalar k
-       => IsYamlScalar v
-       => ByteString
-       -> m (Object k v)
-decode bs = error "FIXME try $ unsafePerformIO $ unYAttemptIO $ Y.decode bs parse"
+-- Parsing
 
-newtype YAttemptIO v = YAttemptIO
-    { unYAttemptIO :: IO (Either ParseException v)
-    }
-instance Monad YAttemptIO where
-    return = YAttemptIO . return . Right
-    (YAttemptIO io) >>= f = YAttemptIO $ do
-        x <- io
-        case x of
-            Left e -> return $ Left e
-            Right y -> unYAttemptIO $ f y
-instance Functor YAttemptIO where
-    fmap = liftM
-instance Applicative YAttemptIO where
-    pure = return
-    (<*>) = ap
-instance Failure ParseException YAttemptIO where
-    failure = YAttemptIO . return . Left
-instance MonadIO YAttemptIO where
-    liftIO = YAttemptIO . fmap Right
+data ParseException = NonScalarKey
+                    | UnknownAlias { _anchorName :: Y.AnchorName }
+                    | UnexpectedEvent { _received :: Maybe Event
+                                      , _expected :: Maybe Event
+                                      }
+                    | InvalidYaml (Maybe ErrMsg)
+    deriving (Show, Typeable)
+instance Exception ParseException
 
-decodeFile :: MonadFailure ParseException m
-           => MonadIO m
-           => IsYamlScalar k
-           => IsYamlScalar v
-           => FilePath
-           -> m (Object k v)
-decodeFile fp = error "FIXME Y.decodeFile fp parse"
+newtype PErrorT m a = PErrorT { runPErrorT :: m (Either ParseException a) }
+instance Monad m => Monad (PErrorT m) where
+    return = PErrorT . return . Right
+    (PErrorT m) >>= f = PErrorT $ do
+        e <- m
+        case e of
+            Left e' -> return $ Left e'
+            Right a -> runPErrorT $ f a
+instance MonadTrans PErrorT where
+    lift = PErrorT . liftM Right
+instance MonadIO m => MonadIO (PErrorT m) where
+    liftIO = lift . liftIO
+instance MonadCatchIO m => MonadCatchIO (PErrorT m) where
+  m `catch` f = mapPErrorT (\m' -> m' `catch` \e -> runPErrorT $ f e) m
+  block       = mapPErrorT block
+  unblock     = mapPErrorT unblock
 
-{-
-requireEvent :: (With m, MonadFailure YamlException m)
-             => Event
-             -> YamlDecoder m ()
--}
-requireEvent e = error "FIXME" {-do
-    e' <- parseEvent
-    unless (e == e')
-        $ failure $ UnexpectedEvent e' $ Just e-}
+mapPErrorT :: (m (Either ParseException a) -> n (Either ParseException b))
+           -> PErrorT m a
+           -> PErrorT n b
+mapPErrorT f m = PErrorT $ f (runPErrorT m)
 
-type Parser s m = StateT (Map.Map String s) m
+pfailure :: Monad m => ParseException -> PErrorT m a
+pfailure = PErrorT . return . Left
 
-parse :: IsYamlScalar k
-      => IsYamlScalar v
-      => Monad m
-      => IterateeG [] Event m (Object k v)
-parse = error "FIXME" {- do
+type Parser = PErrorT (StateT (Map.Map String YamlObject) IO)
+
+requireEvent :: Event -> IterateeG [] Event Parser ()
+requireEvent e = do
+    f <- peek
+    if f == Just e
+        then I.drop 1
+        else lift $ pfailure $ UnexpectedEvent f $ Just e
+
+parse :: IterateeG [] Event Parser YamlObject
+parse = do
     requireEvent EventStreamStart
     requireEvent EventDocumentStart
-    e <- parseEvent
-    res <- evalStateT (parseO e) Map.empty
+    res <- parseO
     requireEvent EventDocumentEnd
     requireEvent EventStreamEnd
     return res
-    -}
 
-parseO :: (IsYamlScalar k, IsYamlScalar v,
-           MonadFailure ParseException m)
-       => Event
-       -> Parser (Object k v) m (Object k v)
-parseO = error "FIXME"
-{-
-parseO (EventScalar v t s a) = do
-    let res = Scalar $ fromYamlScalar $ YamlScalar v t s
+safeHead :: IterateeG [] Event Parser (Maybe Event)
+safeHead = do
+    x <- peek
+    I.drop 1
+    return x
+
+parseScalar :: ByteString -> Tag -> Style -> Anchor
+            -> IterateeG [] Event Parser YamlScalar
+parseScalar v t s a = do
+    let res = YamlScalar v t s
     case a of
         Nothing -> return res
         Just an -> do
-            modify (Map.insert an res)
+            lift $ lift $ modify (Map.insert an $ Scalar res)
             return res
-parseO (EventSequenceStart a) = parseS a id
-parseO (EventMappingStart a) = parseM a id
-parseO (EventAlias an) = do
-    m <- get
-    case Map.lookup an m of
-        Nothing -> failure $ YamlOtherException $ SomeException $ UnknownAlias an
-        Just v -> return v
-parseO e = failure $ YamlOtherException $ SomeException
-                   $ UnexpectedEvent e Nothing
--}
 
-parseS :: (IsYamlScalar k, IsYamlScalar v,
-           MonadFailure ParseException m)
-       => Y.Anchor
-       -> ([Object k v] -> [Object k v])
-       -> Parser (Object k v) m (Object k v)
-parseS a front = error "FIXME" {- do
-    e <- lift $ parseEvent
-    case e of
-        EventSequenceEnd -> do
+parseO :: IterateeG [] Event Parser YamlObject
+parseO = do
+    me <- safeHead
+    case me of
+        Just (EventScalar v t s a) -> Scalar `liftM` parseScalar v t s a
+        Just (EventSequenceStart a) -> parseS a id
+        Just (EventMappingStart a) -> parseM a id
+        Just (EventAlias an) -> do
+            m <- lift $ lift get
+            case Map.lookup an m of
+                Nothing -> lift $ pfailure $ UnknownAlias an
+                Just v -> return v
+        _ -> lift $ pfailure $ UnexpectedEvent me Nothing
+
+parseS :: Y.Anchor
+       -> ([YamlObject] -> [YamlObject])
+       -> IterateeG [] Event Parser YamlObject
+parseS a front = do
+    me <- peek
+    case me of
+        Just EventSequenceEnd -> do
+            I.drop 1
             let res = Sequence $ front []
             case a of
                 Nothing -> return res
                 Just an -> do
-                    modify (Map.insert an res)
+                    lift $ lift $ modify $ Map.insert an res
                     return res
         _ -> do
-            o <- parseO e
+            o <- parseO
             parseS a $ front . (:) o
--}
 
-parseM :: (IsYamlScalar k, IsYamlScalar v,
-           MonadFailure ParseException m)
-       => Y.Anchor
-       -> ([(k, Object k v)] -> [(k, Object k v)])
-       -> IterateeG [] Event (Parser (Object k v) m) (Object k v)
-parseM a front = error "FIXME" {-do
-    e <- lift $ parseEvent
-    case e of
-        EventMappingEnd -> do
+parseM :: Y.Anchor
+       -> ([(YamlScalar, YamlObject)] -> [(YamlScalar, YamlObject)])
+       -> IterateeG [] Event Parser YamlObject
+parseM a front = do
+    me <- peek
+    case me of
+        Just EventMappingEnd -> do
+            I.drop 1
             let res = Mapping $ front []
             case a of
                 Nothing -> return res
                 Just an -> do
-                    modify (Map.insert an res)
+                    lift $ lift $ modify $ Map.insert an res
                     return res
-        EventScalar v' t s Nothing -> do
-            let k = fromYamlScalar $ YamlScalar v' t s
-            v <- (lift $ parseEvent) >>= parseO
-            parseM a $ front . (:) (k, v)
-        _ -> failure NonScalarKey
--}
+        _ -> do
+            me' <- safeHead
+            s <- case me' of
+                    Just (EventScalar v t s a') -> parseScalar v t s a'
+                    _ -> lift $ pfailure $ UnexpectedEvent me' Nothing
+            o <- parseO
+            parseM a $ front . (:) (s, o)
 
-data ParseException = NonScalarKey
-                    | UnknownAlias { _anchorName :: Y.AnchorName }
-                    | UnexpectedEvent { _received :: Event
-                                      , _expected :: Maybe Event
-                                      }
-    deriving (Show, Typeable)
-instance Exception ParseException
--}
+decode :: MonadFailure ParseException m
+       => ByteString
+       -> m YamlObject
+decode bs = try $ unsafePerformIO $ run' $ joinIM $ Y.decode bs parse
+
+decodeFile :: MonadFailure ParseException m
+           => FilePath
+           -> IO (m YamlObject)
+decodeFile fp = fmap try $ run' $ joinIM $ Y.decodeFile fp parse
+
+run' :: IterateeG [] Event Parser a
+     -> IO (Either ParseException a)
+run' iter = do
+    let mmmitergv = runIter iter $ EOF Nothing
+        mmitergv = runPErrorT mmmitergv
+        mitergv = evalStateT mmitergv Map.empty
+    itergv <- mitergv
+    case itergv of
+        Left e -> return $ Left e
+        Right (Done x _) -> return $ Right x
+        Right (Cont _ e) -> return $ Left $ InvalidYaml e
 
 #if TEST
 mkScalar :: String -> YamlScalar
@@ -278,12 +302,10 @@ testSuite :: Test
 testSuite = testGroup "Data.Object.Yaml"
     [ testCase "encode" caseEncode
     , testCase "encode file" caseEncodeFile
-  {-
-      testCase "encode/decode" caseEncodeDecode
+    , testCase "encode/decode" caseEncodeDecode
     , testCase "encode/decode file" caseEncodeDecodeFile
     , testCase "encode/decode strings" caseEncodeDecodeStrings
     , testCase "decode invalid file" caseDecodeInvalid
-    -}
     ]
 
 caseEncode :: Assertion
@@ -298,7 +320,6 @@ caseEncodeFile = do
     out <- B8.readFile tmpfile
     B8.unpack out @?= sampleEncoded
 
-{- FIXME
 caseEncodeDecode :: Assertion
 caseEncodeDecode = do
     out <- decode $ encode sample
@@ -308,18 +329,17 @@ caseEncodeDecodeFile :: Assertion
 caseEncodeDecodeFile = do
     let fp = "tmp.yaml"
     encodeFile fp sample
-    out <- decodeFile fp
+    out <- join $ decodeFile fp
     out @?= sample
 
 caseEncodeDecodeStrings :: Assertion
 caseEncodeDecodeStrings = do
-    out <- decode $ encode sampleStr
-    out @?= sampleStr
+    out <- decode $ encode $ toYamlObject sampleStr
+    fromYamlObject out @?= sampleStr
 
 caseDecodeInvalid :: Assertion
 caseDecodeInvalid = do
     let invalid = B8.pack "\tthis is 'not' valid :-)"
     Nothing @=? (decode invalid :: Maybe YamlObject)
--}
 
 #endif
