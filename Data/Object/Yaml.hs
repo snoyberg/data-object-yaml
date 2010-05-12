@@ -98,16 +98,20 @@ fromYamlObject :: IsYamlScalar k
                -> Object k v
 fromYamlObject = mapKeysValues fromYamlScalar fromYamlScalar
 
-encode :: YamlObject -> ByteString
+encode :: (IsYamlScalar k, IsYamlScalar v) => Object k v -> ByteString
 encode obj =
-    unsafePerformIO (enumPure1Chunk (objToEvents obj) Y.encode >>= run)
+    unsafePerformIO
+    (enumPure1Chunk
+        (objToEvents $ toYamlObject obj)
+        Y.encode >>= run)
 
-encodeFile :: MonadIO m
+encodeFile :: (MonadIO m, IsYamlScalar k, IsYamlScalar v)
            => FilePath
-           -> YamlObject
+           -> Object k v
            -> m ()
 encodeFile fp obj =
-    enumPure1Chunk (objToEvents obj) (Y.encodeFile fp) >>= run
+    enumPure1Chunk (objToEvents $ toYamlObject obj) (Y.encodeFile fp)
+    >>= run
 
 objToEvents :: YamlObject -> [Y.Event]
 objToEvents o = (:) EventStreamStart
@@ -268,18 +272,19 @@ parseM a front = do
           merge' al (Mapping om) = mergeAssocLists al om
           merge' al _            = al
 
-decode :: MonadFailure ParseException m
+decode :: (MonadFailure ParseException m, IsYamlScalar k, IsYamlScalar v)
        => ByteString
-       -> m YamlObject
+       -> m (Object k v)
 decode bs = try $ unsafePerformIO $ run' $ joinIM $ Y.decode bs parse
 
-decodeFile :: MonadFailure ParseException m
+decodeFile :: (MonadFailure ParseException m, IsYamlScalar k, IsYamlScalar v)
            => FilePath
-           -> IO (m YamlObject)
+           -> IO (m (Object k v))
 decodeFile fp = fmap try $ run' $ joinIM $ Y.decodeFile fp parse
 
-run' :: IterateeG [] Event Parser a
-     -> IO (Either ParseException a)
+run' :: (IsYamlScalar k, IsYamlScalar v)
+     => IterateeG [] Event Parser YamlObject
+     -> IO (Either ParseException (Object k v))
 run' iter = do
     let mmmitergv = runIter iter $ EOF Nothing
         mmitergv = runPErrorT mmmitergv
@@ -287,6 +292,6 @@ run' iter = do
     itergv <- mitergv
     case itergv of
         Left e -> return $ Left e
-        Right (Done x _) -> return $ Right x
+        Right (Done x _) -> return $ Right $ fromYamlObject x
         Right (Cont _ e) -> return $ Left $ InvalidYaml e
 
