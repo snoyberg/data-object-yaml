@@ -17,6 +17,8 @@ module Data.Object.Yaml
     , encodeFile
     , decode
     , decodeFile
+      -- * Exceptions
+    , ParseException (..)
     ) where
 
 import qualified Text.Libyaml as Y
