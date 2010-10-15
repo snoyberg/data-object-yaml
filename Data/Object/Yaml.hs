@@ -43,9 +43,8 @@ import Control.Monad.Trans.State
 import Control.Monad
 import qualified Data.Enumerator as E
 import Data.Enumerator (($$))
-import "MonadCatchIO-transformers" Control.Monad.CatchIO hiding (try)
 import Prelude hiding (catch)
-import Control.Exception (throwIO)
+import Control.Exception (throwIO, Exception)
 
 -- | Equality depends on 'value' and 'tag', not 'style'.
 data YamlScalar = YamlScalar
@@ -171,15 +170,6 @@ instance MonadTrans PErrorT where
     lift = PErrorT . liftM Right
 instance MonadIO m => MonadIO (PErrorT m) where
     liftIO = lift . liftIO
-instance MonadCatchIO m => MonadCatchIO (PErrorT m) where
-  m `catch` f = mapPErrorT (\m' -> m' `catch` \e -> runPErrorT $ f e) m
-  block       = mapPErrorT block
-  unblock     = mapPErrorT unblock
-
-mapPErrorT :: (m (Either ParseException a) -> n (Either ParseException b))
-           -> PErrorT m a
-           -> PErrorT n b
-mapPErrorT f m = PErrorT $ f (runPErrorT m)
 
 pfailure :: Monad m => ParseException -> PErrorT m a
 pfailure = PErrorT . return . Left

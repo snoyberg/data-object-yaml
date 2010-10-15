@@ -1,5 +1,5 @@
 name:            data-object-yaml
-version:         0.3.2
+version:         0.3.3
 license:         BSD3
 license-file:    LICENSE
 author:          Michael Snoyman <michael@snoyman.com>, Anton Ageev <antage@gmail.com>
@@ -23,10 +23,9 @@ library
                      text >= 0.7 && < 0.10,
                      failure >= 0.1.0 && < 0.2,
                      transformers >= 0.2 && < 0.3,
-                     yaml >= 0.4 && < 0.5,
+                     yaml >= 0.4.1 && < 0.5,
                      containers >= 0.2.0.0 && < 0.5,
                      enumerator >= 0.4 && < 0.5,
-                     MonadCatchIO-transformers >= 0.2.2 && < 0.3,
                      convertible-text >= 0.3.0 && < 0.4
     exposed-modules: Data.Object.Yaml
     ghc-options:     -Wall
