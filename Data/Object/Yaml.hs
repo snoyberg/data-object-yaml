@@ -89,8 +89,8 @@ mergeAssocLists a [] = a
 mergeAssocLists [] b = b
 mergeAssocLists a ((bk, bv):bs) =
     case lookup bk a of
-      Nothing -> mergeAssocLists ((bk, bv) : a) bs
-      Just _  -> mergeAssocLists a bs
+      Nothing -> (bk, bv) : mergeAssocLists a bs
+      Just av -> (bk, av) : mergeAssocLists (filter (\(x, _) -> x /= bk) a) bs
 
 toYamlObject :: IsYamlScalar k
              => IsYamlScalar v
