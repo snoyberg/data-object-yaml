@@ -54,6 +54,7 @@ testSuite = testGroup "Data.Object.Yaml"
     , testCase "encode/decode file" caseEncodeDecodeFile
     , testCase "encode/decode strings" caseEncodeDecodeStrings
     , testCase "decode invalid file" caseDecodeInvalid
+    , testCase "encode/decode in order" caseInOrder
     ]
 
 caseEncodeDecode :: Assertion
@@ -159,3 +160,10 @@ caseMergeSequence = do
     mappingKey res "k1" @?= Scalar (mkStrScalar "1")
     mappingKey res "k2" @?= Scalar (mkStrScalar "2")
     mappingKey res "k3" @?= Scalar (mkStrScalar "4")
+
+inOrderData :: String
+inOrderData = "'Fatal': 'Unknown variable \"bar\"'\n'Date': '2001-11-23 15:03:17 -5'\n'User': 'ed'\n'Stack':\n- 'line': '23'\n  'file': 'TopClass.py'\n  'code': 'x = MoreObject(\"345\\n\")\n\n'\n- 'line': '58'\n  'file': 'MoreClass.py'\n  'code': 'foo = bar'\n"
+caseInOrder :: Assertion
+caseInOrder = do
+    Just (Mapping ((x, _):_)) <- return $ decodeYaml inOrderData
+    x @?= mkScalar "Fatal"
