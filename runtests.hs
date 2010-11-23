@@ -163,7 +163,15 @@ caseMergeSequence = do
 
 inOrderData :: String
 inOrderData = "'Fatal': 'Unknown variable \"bar\"'\n'Date': '2001-11-23 15:03:17 -5'\n'User': 'ed'\n'Stack':\n- 'line': '23'\n  'file': 'TopClass.py'\n  'code': 'x = MoreObject(\"345\\n\")\n\n'\n- 'line': '58'\n  'file': 'MoreClass.py'\n  'code': 'foo = bar'\n"
+
+inOrderData2 :: String
+inOrderData2 =
+       "'a': '1'\n'b': '2'\n'd': '4'\n'c': '3'\n"
+    ++ "'g': '1'\n'n': '2'\n'q': '4'\n'f': '3'\n"
+    ++ "'z': '1'\n'y': '2'\n'x': '4'\n'w': '3'\n"
+
 caseInOrder :: Assertion
 caseInOrder = do
     Just (Mapping ((x, _):_)) <- return $ decodeYaml inOrderData
     x @?= mkScalar "Fatal"
+    fmap (B8.unpack . encode) (decodeYaml inOrderData2) @?= Just inOrderData2
