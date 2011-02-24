@@ -99,6 +99,14 @@ from Data.Object. For example:
         putStrLn $ "Michael is " ++ age ++ " years old."
 @
 
+lookupScalar and friends implement Maybe, so you can test for optional 
+attributes by switching on Nothing/Just a:
+
+@
+    name <- lookupScalar "middleName" michael :: Maybe String
+@
+
+
 /And that's it/
 
 There's really not more to know about this library. Enjoy!

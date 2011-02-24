@@ -1,0 +1,17 @@
+= data-object-yaml
+
+Serialize data to and from YAML files.
+
+== Usage
+
+See documentation in Data/Object/Yaml.hs
+
+== Installation
+
+This package is available on hackage
+
+  cabal install data-objects-yaml
+
+== Status
+
+This library is used in the Yesod web framework, and is considered stable and production ready.
