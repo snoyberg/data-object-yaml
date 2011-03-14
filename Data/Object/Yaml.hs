@@ -152,6 +152,7 @@ import qualified Data.Enumerator as E
 import Data.Enumerator (($$))
 import Prelude hiding (catch)
 import Control.Exception (throwIO, Exception)
+import GHC.Exts (IsString (fromString))
 
 -- | Equality depends on 'value' and 'tag', not 'style'.
 data YamlScalar = YamlScalar
@@ -162,6 +163,8 @@ data YamlScalar = YamlScalar
     deriving (Show, Read, Data, Typeable)
 instance Eq YamlScalar where
     (YamlScalar v t _) == (YamlScalar v' t' _) = v == v' && t == t'
+instance IsString YamlScalar where
+    fromString = toYamlScalar
 
 type YamlObject = Object YamlScalar YamlScalar
 
