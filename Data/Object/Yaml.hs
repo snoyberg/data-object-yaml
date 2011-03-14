@@ -152,7 +152,7 @@ import qualified Data.Enumerator as E
 import Data.Enumerator (($$))
 import Prelude hiding (catch)
 import Control.Exception (throwIO, Exception)
-import GHC.Exts (IsString (fromString))
+import Data.String (IsString (fromString))
 
 -- | Equality depends on 'value' and 'tag', not 'style'.
 data YamlScalar = YamlScalar
