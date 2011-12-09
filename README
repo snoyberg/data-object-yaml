@@ -10,7 +10,7 @@ See documentation in Data/Object/Yaml.hs
 
 This package is available on hackage
 
-  cabal install data-objects-yaml
+  cabal install data-object-yaml
 
 == Status
 
