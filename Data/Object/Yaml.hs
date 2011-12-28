@@ -4,6 +4,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PackageImports #-}
+{-# LANGUAGE PatternGuards #-}
 {-|
 As a bit of background, this package is built on a few other packages I wrote.
 yaml is a low-level wrapper around the C libyaml library, with an enumerator
@@ -275,9 +276,6 @@ instance MonadTrans PErrorT where
     lift = PErrorT . liftM Right
 instance MonadIO m => MonadIO (PErrorT m) where
     liftIO = lift . liftIO
-
-pfailure :: Monad m => ParseException -> PErrorT m a
-pfailure = PErrorT . return . Left
 
 type Parser = StateT (Map.Map String YamlObject) IO
 
